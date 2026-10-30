@@ -38,3 +38,6 @@ data/
 
 # Privata arbetsdokument (läroplaner, utkast) — aldrig publika
 docs/privat/
+
+# lokal MCP-config (relativ, men maskin-lokal)
+.mcp.json
