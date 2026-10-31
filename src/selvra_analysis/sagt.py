@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,12 @@ MODALITETER = ("faktisk", "avsedd", "hypotetisk", "annans_rost", "osaker")
 # kod; en modell får aldrig välja den.
 ROLLER = ("user", "assistant", "third", "system", "verktyg")
 ROLL_TILL_TALARE = {"user": "anvandare", "assistant": "assistent", "third": "tredje_part"}
+# Selvras egna röster i dialogen — deras ord är aldrig användarens. Citerar
+# användaren tillbaka ett Selvra-brev får det spannet aldrig bli ett sagt-
+# påstående (återkopplingsslingan som annars ger dubbletter av Selvras meningar).
+SELVRA_ROLLER = ("assistant", "system", "verktyg")
+MASK = "⟦selvra⟧"
+MIN_MASK = 12  # tecken; kortare överlapp maskas inte (triviala ord sammanfaller)
 # Typade länkar (append-only). Modellen får föreslå en länk; den redigerar eller
 # slår aldrig ihop. supersedes/corrects gör en post inaktiv; contradicts löses
 # aldrig i kod; context_differs bär en kvalificerare. De fyra går post↔post via
@@ -106,6 +113,40 @@ def observe_message(roll: str, text: str, *, kalla: str = "mcp",
     return mid
 
 
+def _selvra_korpus() -> list[str]:
+    """Selvras egna texter i journalen: meddelanden från assistant/system/verktyg
+    (dialogens Selvra-röst). Sänt brev kan läggas till som sådana meddelanden."""
+    return [_nfc(r["text"]) for r in _journal_rader()
+            if r.get("op") == "meddelande" and r.get("roll") in SELVRA_ROLLER]
+
+
+def ar_selvra_citat(citat: str, korpus: list[str] | None = None) -> bool:
+    """True om citatet (≥ MIN_MASK tecken, NFC) ordagrant återfinns i Selvras egna
+    texter — då citerar användaren ett Selvra-brev, inte sina egna ord."""
+    c = _nfc(citat).strip()
+    if len(c) < MIN_MASK:
+        return False
+    korp = _selvra_korpus() if korpus is None else [_nfc(k) for k in korpus]
+    return any(c in k for k in korp)
+
+
+def mask_selvra_quotes(text: str, korpus: list[str] | None = None) -> str:
+    """Maska de satser i `text` som är ordagranna citat (≥ MIN_MASK tecken) av
+    något i Selvras egna texter, så att extraktionen inte kan göra Selvras ord
+    till ett sagt-påstående. Användarens egna meningar lämnas orörda."""
+    korp = _selvra_korpus() if korpus is None else [_nfc(k) for k in korpus]
+    if not korp:
+        return text
+    ut = []
+    for del_ in re.split(r"([.!?\n]+)", _nfc(text)):
+        sats = del_.strip()
+        if len(sats) >= MIN_MASK and any(sats in k for k in korp):
+            ut.append(del_.replace(sats, MASK))
+        else:
+            ut.append(del_)
+    return "".join(ut)
+
+
 def spara(post: dict) -> str:
     """Ny sagt-post. Citatet är obligatoriskt och heligt; enums valideras hårt.
     Returnerar id. Detta är modulens ENDA väg in för nytt innehåll."""
@@ -122,6 +163,10 @@ def spara(post: dict) -> str:
         raise ValueError("bara användarens egna ord (talare=anvandare) kan bli en "
                          f"sagt-post; fick talare {post.get('talare')!r}")
     post = {**post, "citat": _nfc(post["citat"])}  # NFC före hash och lagring
+    # Återkopplingsspärr: Selvras egna ord (ett citerat brev) blir aldrig sagt.
+    if ar_selvra_citat(post["citat"]):
+        raise ValueError("citatet är Selvras egna ord (ett citerat brev), inte "
+                         "användarens — avvisat för att bryta återkopplingsslingan")
     pid = hashlib.sha256(
         f"{post['kalla']}|{post.get('kallmeddelande_id')}|{post['citat']}|"
         f"{post.get('citat_offset')}".encode()).hexdigest()[:12]

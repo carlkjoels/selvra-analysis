@@ -284,3 +284,41 @@ def test_ombyggd_vy_lika_med_levande(tmp_path, monkeypatch) -> None:
         assert live[vid]["ersatt_av"] == ersatt
         assert live[vid]["linje_id"] == linje
     assert (nytt, gammalt, "corrects") in lankar
+
+
+# --- Maskning av citerade Selvra-brev (återkopplingsspärren) ---
+
+def test_citerat_selvra_brev_blir_aldrig_sagt(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    brev = "Du sov 7 timmar och 12 minuter i natt."
+    sagt.observe_message("assistant", brev)         # Selvras eget brev i dialogen
+    with pytest.raises(ValueError, match="återkopplingsslingan"):
+        sagt.spara({**POST, "citat": brev, "citat_offset": 0,
+                    "typ": "handelse", "modalitet": "faktisk"})
+
+
+def test_anvandarens_egna_ord_sparas_trots_brev(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    sagt.observe_message("assistant", "Du sov 7 timmar och 12 minuter i natt.")
+    pid = sagt.spara({**POST, "citat": "jag sover alltid dåligt på söndagar",
+                      "citat_offset": 0, "typ": "sjalvbild", "modalitet": "faktisk"})
+    assert pid
+    assert sagt.hamta("söndagar")[0]["citat"] == "jag sover alltid dåligt på söndagar"
+
+
+def test_mask_selvra_quotes_maskar_bara_brevet(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    sagt.observe_message("assistant", "Du sov 7 timmar i natt.")
+    text = "Du sov 7 timmar i natt. Men jag kände mig ändå pigg."
+    maskad = sagt.mask_selvra_quotes(text)
+    assert sagt.MASK in maskad
+    assert "7 timmar" not in maskad                 # Selvras mening maskad
+    assert "jag kände mig ändå pigg" in maskad      # användarens mening kvar
+
+
+def test_kort_overlapp_med_brev_maskas_inte(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    sagt.observe_message("assistant", "Du sov 7 timmar i natt.")
+    pid = sagt.spara({**POST, "citat": "7 timmar", "citat_offset": 0,   # < MIN_MASK
+                      "typ": "handelse", "modalitet": "faktisk"})
+    assert pid                                        # kort överlapp spärras inte
