@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import json
 import re
 import sys
@@ -50,6 +51,8 @@ PRIVATE_KEY = KEY_DIR / "vapid_private.pem"
 PUBLIC_CONFIG = Path("web/morgon/config.js")
 CONTACT = "mailto:hello@selvra.ai"
 SHORT_MAX = 170           # what a lock-screen notification shows
+FIT_DIR = Path("data/fit")
+FIT_PAMINNELSE_DAGAR = 7  # carl: påminn om senaste FIT-filen är äldre än så
 
 
 def _public_key_b64(v: Vapid01) -> str:
@@ -145,6 +148,62 @@ def _framstegsrad_for(person: str, paths: dict) -> str | None:
         return None
 
 
+def _las_schema(path: Path) -> list[dict]:
+    """schema.csv → rader, kommentarraden (# seed=…) hoppas över."""
+    rader = [r for r in path.read_text().splitlines() if r and not r.startswith("#")]
+    return list(csv.DictReader(rader))
+
+
+def _n1_studiemappar(person: str, paths: dict):
+    """Mappar med en LÅST n1-studie (las.json) som har en schema.csv. Personens
+    egna utkast + för carl repots studies/."""
+    mappar = (list((paths["dir"] / "forslag").glob("*"))
+              if (paths["dir"] / "forslag").exists() else [])
+    if person == "carl" and Path("studies").exists():
+        mappar += list(Path("studies").glob("[0-9][0-9][0-9]-*"))
+    for mapp in mappar:
+        if not (mapp.is_dir() and (mapp / "schema.csv").exists()
+                and (mapp / "las.json").exists() and (mapp / "studie.yml").exists()):
+            continue
+        spec = yaml.safe_load((mapp / "studie.yml").read_text())
+        if (spec.get("design") or {}).get("typ") == "n1":
+            yield mapp, spec
+
+
+def n1_villkorsrad(person: str, paths: dict, today: date) -> str | None:
+    """En saklig rad med dagens villkor för en låst n1-studie, ordagrant ur
+    schema.csv och studiens egna A/B-text. Tyst om ingen låst n1-studie har en
+    rad för idag — aldrig en påhittad studie."""
+    iso = today.isoformat()
+    for mapp, spec in _n1_studiemappar(person, paths):
+        rad = next((r for r in _las_schema(mapp / "schema.csv") if r.get("date") == iso), None)
+        if not rad:
+            continue
+        design = spec.get("design") or {}
+        nr = str(spec.get("id", mapp.name))[:3]
+        par, total = rad.get("pair"), design.get("par")
+        parstr = f"par {par}/{total}" if par and total else f"par {par}" if par else "pågår"
+        if str(rad.get("washout")).lower() == "true":
+            return f"Studie {nr} idag ({parstr}): tvättdag — inget villkor att hålla."
+        villkor = design.get(rad.get("condition"), rad.get("condition"))
+        return f"Studie {nr} idag ({parstr}): {rad.get('condition')} — {villkor}"
+    return None
+
+
+def fit_paminnelse(today: date, mapp: Path = FIT_DIR) -> str | None:
+    """Carl: påminn när senaste FIT-filen är äldre än FIT_PAMINNELSE_DAGAR (eller
+    saknas) — klockans facit för källjämförelsen ruttnar annars i tysthet."""
+    filer = list(mapp.glob("**/*.[fF][iI][tT]")) if mapp.exists() else []
+    if not filer:
+        return ("Påminnelse: inga FIT-filer i data/fit/ än — koppla klockan via USB "
+                "så får källjämförelsen sitt facit.")
+    alder = (today - date.fromtimestamp(max(f.stat().st_mtime for f in filer))).days
+    if alder > FIT_PAMINNELSE_DAGAR:
+        return (f"Påminnelse: senaste FIT-filen är {alder} dagar gammal — koppla klockan "
+                "via USB och lägg filerna i data/fit/ för färsk källjämförelse.")
+    return None
+
+
 def _report(person: str, fetch: bool) -> dict:
     paths = person_paths(person)
     conf = yaml.safe_load((paths["dir"] / "person.yml").read_text())
@@ -165,6 +224,13 @@ def _report(person: str, fetch: bool) -> dict:
     rad = forslagsrad(person, paths["db"], today, bygg=fetch)
     if rad:
         body = body.rstrip() + "\n\n" + rad + "\n"
+    n1rad = n1_villkorsrad(person, paths, today)
+    if n1rad:
+        body = body.rstrip() + "\n\n" + n1rad + "\n"
+    if person == "carl":
+        prad = fit_paminnelse(today)
+        if prad:
+            body = body.rstrip() + "\n\n" + prad + "\n"
     return payload(subject, body, today)
 
 
