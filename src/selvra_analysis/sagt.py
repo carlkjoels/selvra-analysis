@@ -34,12 +34,18 @@ STATUSAR = ["sagt", "matt", "provat"]
 KALLOR = ("morgonsvar", "onboarding", "import", "mcp")
 POLARITETER = ("bekraftad", "negerad")
 MODALITETER = ("faktisk", "avsedd", "hypotetisk", "annans_rost")
+# Vem som yttrade citatet. Sätts ALLTID av koden utifrån meddelandets roll,
+# aldrig av en modell — polariteten/modaliteten kan en modell föreslå, men
+# vem som talade är ett faktum ur källan. anvandare = personen själv,
+# assistent = Selvra/modellen, tredje_part = någon annan (jfr modalitet
+# annans_rost, som är OM någon annan; talare är VEM som sa det).
+TALARE = ("anvandare", "assistent", "tredje_part")
 EVIDENSTYPER = ("matserie", "last_studie")
 
 FALT = ("id", "typ", "status", "kalla", "kallmeddelande_id", "citat", "citat_offset",
-        "polaritet", "modalitet", "said_at", "tidsuttryck_ratt", "refers_to_from",
-        "refers_to_to", "resolverversion", "bekraftad_av_anvandaren_vid",
-        "modell", "promptversion", "lankar", "evidens")
+        "polaritet", "modalitet", "talare", "said_at", "tidsuttryck_ratt",
+        "refers_to_from", "refers_to_to", "resolverversion",
+        "bekraftad_av_anvandaren_vid", "modell", "promptversion", "lankar", "evidens")
 
 
 def _journal_rader() -> list[dict]:
@@ -60,7 +66,8 @@ def spara(post: dict) -> str:
     if not str(post.get("citat", "")).strip():
         raise ValueError("en post utan citat är en tolkning, inte en logg — avvisad")
     for falt, tillatna in (("typ", TYPER), ("kalla", KALLOR),
-                           ("polaritet", POLARITETER), ("modalitet", MODALITETER)):
+                           ("polaritet", POLARITETER), ("modalitet", MODALITETER),
+                           ("talare", TALARE)):
         if post.get(falt) not in tillatna:
             raise ValueError(f"{falt} måste vara en av {tillatna}, fick {post.get(falt)!r}")
     pid = hashlib.sha256(
@@ -119,6 +126,8 @@ def _aktuella() -> dict[str, dict]:
     for r in _journal_rader():
         if r["op"] == "post":
             poster[r["id"]] = dict(r)
+            # poster från före talare-fältet var alltid användarens egna ord
+            poster[r["id"]].setdefault("talare", "anvandare")
         elif r["op"] == "status" and r["id"] in poster:
             poster[r["id"]]["status"] = r["status"]
             poster[r["id"]]["evidens"] = r["evidens"]
@@ -143,12 +152,39 @@ def hamta(amne: str, person: str = "carl") -> list[dict]:
             ut.append({
                 "citat": p.get("citat"), "citat_offset": p.get("citat_offset"),
                 "typ": p.get("typ"), "polaritet": p.get("polaritet"),
-                "modalitet": p.get("modalitet"), "status": p.get("status", "sagt"),
+                "modalitet": p.get("modalitet"), "talare": p.get("talare", "anvandare"),
+                "status": p.get("status", "sagt"),
                 "kalla": p.get("kalla"), "said_at": p.get("said_at"),
                 "evidens": p.get("evidens"),
                 "bekraftad_av_anvandaren_vid": p.get("bekraftad_av_anvandaren_vid"),
             })
     return sorted(ut, key=lambda r: str(r.get("said_at") or ""))
+
+
+def migrera_talare(talare: str = "anvandare") -> int:
+    """Engångs-backfyllnad av talare på befintliga poster. Fältet var alltid
+    implicit — sagt har bara loggat användarens egna ord — så standard är
+    'anvandare'. Detta är en schemamigrering, inte en innehållsändring: citat,
+    status, polaritet och allt övrigt lämnas orört, bara talare tillkommer.
+    Idempotent: poster som redan har talare rörs inte. Returnerar antal ändrade.
+
+    Till skillnad från spara/bekrafta/uppgradera_status rör denna funktion
+    historiska rader — den körs en gång vid införandet av fältet, aldrig i drift."""
+    if talare not in TALARE:
+        raise ValueError(f"talare måste vara en av {TALARE}, fick {talare!r}")
+    if not JOURNAL.exists():
+        return 0
+    rader = _journal_rader()
+    andrade = 0
+    for r in rader:
+        if r.get("op") == "post" and "talare" not in r:
+            r["talare"] = talare
+            andrade += 1
+    if andrade:
+        with JOURNAL.open("w") as f:
+            for r in rader:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return andrade
 
 
 def spela_upp(db: Path = DB) -> None:

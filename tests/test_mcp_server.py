@@ -20,6 +20,9 @@ def test_spara_sagt_ger_alltid_status_sagt(tmp_path, monkeypatch) -> None:
     assert len(r) == 1
     assert r[0]["status"] == "sagt"
     assert r[0]["citat"] == "Jag sover sämre efter kvällspass"
+    # talare sätts i servern, inte av agenten: alltid anvandare, ingen parameter
+    assert r[0]["talare"] == "anvandare"
+    assert "talare" not in srv.spara_sagt.__doc__.lower()  # verktyget erbjuder inte valet
 
 
 def test_negerad_kommer_tillbaka_negerad(tmp_path, monkeypatch) -> None:

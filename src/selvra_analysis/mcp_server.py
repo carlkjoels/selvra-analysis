@@ -51,8 +51,11 @@ def spara_sagt(citat: str, typ: str, polaritet: str, modalitet: str,
     polaritet: bekraftad|negerad. modalitet: faktisk|avsedd|hypotetisk|annans_rost.
     Ingen omskrivning, ingen tolkning — bara det som sades, loggat."""
     try:
+        # talare sätts i koden, inte av modellen: spara_sagt loggar personens
+        # egna ord, så talaren är alltid 'anvandare' — aldrig något verktyget
+        # låter agenten välja.
         pid = sagt.spara({"citat": citat, "typ": typ, "polaritet": polaritet,
-                          "modalitet": modalitet, "kalla": kalla,
+                          "modalitet": modalitet, "talare": "anvandare", "kalla": kalla,
                           "kallmeddelande_id": None, "citat_offset": 0,
                           "said_at": str(date.today()), "tidsuttryck_ratt": None,
                           "modell": "mcp", "promptversion": "v0"})

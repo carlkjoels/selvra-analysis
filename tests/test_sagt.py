@@ -7,7 +7,7 @@ from selvra_analysis import sagt, sprakgrind
 
 POST = {"typ": "intention", "kalla": "morgonsvar", "kallmeddelande_id": "m1",
         "citat": "jag vill börja promenera efter lunch", "citat_offset": 12,
-        "polaritet": "bekraftad", "modalitet": "avsedd",
+        "polaritet": "bekraftad", "modalitet": "avsedd", "talare": "anvandare",
         "said_at": "2026-10-29", "tidsuttryck_ratt": "efter lunch",
         "modell": "test", "promptversion": "p0"}
 
@@ -125,3 +125,53 @@ def test_hamta_bara_carl_i_v0(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     sagt.spara(POST)
     assert sagt.hamta("promenera", person="testare-1") == []
+
+
+# --- Punkt 4: talare (anvandare | assistent | tredje_part) ------------------
+
+def test_talare_kravs_och_valideras(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(ValueError, match="talare"):
+        sagt.spara({k: v for k, v in POST.items() if k != "talare"})  # saknas
+    with pytest.raises(ValueError, match="talare"):
+        sagt.spara({**POST, "talare": "roboten"})                      # ogiltig
+
+
+def test_hamta_bar_talare(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    sagt.spara({**POST, "talare": "tredje_part",
+                "citat": "mamma sa att jag sover oroligt", "citat_offset": 0,
+                "modalitet": "annans_rost"})
+    r = sagt.hamta("mamma")[0]
+    assert r["talare"] == "tredje_part"       # VEM som sa det
+    assert r["modalitet"] == "annans_rost"    # OM någon annan — ortogonalt
+
+
+def test_migrera_talare_backfyller_gamla_poster(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    # skriv en post UTAN talare direkt till journalen (som en post från före fältet)
+    sagt._skriv({"op": "post", "id": "abc", "status": "sagt",
+                 "citat": "gammalt ord", "kalla": "import"})
+    assert sagt.migrera_talare() == 1
+    rad = next(r for r in sagt._journal_rader() if r.get("id") == "abc")
+    assert rad["talare"] == "anvandare"
+    # citat och status orörda
+    assert rad["citat"] == "gammalt ord"
+    assert rad["status"] == "sagt"
+
+
+def test_migrera_talare_ar_idempotent(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    sagt.spara(POST)                 # har redan talare
+    assert sagt.migrera_talare() == 0
+    assert sagt.migrera_talare() == 0
+
+
+def test_aterspelning_bar_talare_aven_for_omigrerad(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    sagt._skriv({"op": "post", "id": "x1", "status": "sagt",
+                 "citat": "utan talare", "kalla": "import"})
+    db = tmp_path / "t.duckdb"
+    sagt.spela_upp(db)               # ska defaulta talare, inte krascha
+    with duckdb.connect(str(db), read_only=True) as con:
+        assert con.execute("select talare from sagt.post").fetchone()[0] == "anvandare"
