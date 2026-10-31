@@ -334,10 +334,12 @@ def scan(db_path: Path) -> list[Pattern]:
     return sorted(patterns, key=lambda p: -p.vikt)
 
 
-def spara_hypoteser(patterns: list[Pattern]) -> int:
-    """Skriv skanningens studiefrågor till Dreamer-minnets öppna hypoteser."""
+def spara_hypoteser(patterns: list[Pattern], studies_dir: Path = Path("studies")) -> int:
+    """Skriv skanningens studiefrågor till Dreamer-minnets öppna hypoteser.
+    studies_dir är styrbar så tester kan skriva till tmp_path i stället för den
+    riktiga studies/minne.yml (conftest-vakten fäller den som rör riktiga filer)."""
     fragor = [f for p in patterns for f in p.fragor]
-    return lagg_till_hypoteser(fragor)
+    return lagg_till_hypoteser(fragor, studies_dir)
 
 
 def _format(patterns: list[Pattern]) -> str:
