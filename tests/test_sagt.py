@@ -1,5 +1,7 @@
 """sagt: append-only bevisas, citatet är heligt, evidens är enda vägen uppåt."""
 
+import unicodedata
+
 import duckdb
 import pytest
 
@@ -139,11 +141,14 @@ def test_talare_kravs_och_valideras(tmp_path, monkeypatch) -> None:
 
 def test_hamta_bar_talare(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    sagt.spara({**POST, "talare": "tredje_part",
+    # Användaren rapporterar någon annans ord: talare=anvandare (vem som SA det
+    # till Selvra), modalitet=annans_rost (OM vem det handlar). Ortogonalt — och
+    # en sagt-post är ALLTID anvandare (rollvitlistan).
+    sagt.spara({**POST, "talare": "anvandare",
                 "citat": "mamma sa att jag sover oroligt", "citat_offset": 0,
                 "modalitet": "annans_rost"})
     r = sagt.hamta("mamma")[0]
-    assert r["talare"] == "tredje_part"       # VEM som sa det
+    assert r["talare"] == "anvandare"         # VEM som sa det till Selvra
     assert r["modalitet"] == "annans_rost"    # OM någon annan — ortogonalt
 
 
@@ -175,3 +180,92 @@ def test_aterspelning_bar_talare_aven_for_omigrerad(tmp_path, monkeypatch) -> No
     sagt.spela_upp(db)               # ska defaulta talare, inte krascha
     with duckdb.connect(str(db), read_only=True) as con:
         assert con.execute("select talare from sagt.post").fetchone()[0] == "anvandare"
+
+
+# --- Steg 1+2: rollvitlista, NFC, meddelandelogg, länkar, aktiv/ersatt_av ---
+
+def test_bara_user_kan_bli_sagt(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    for t in ("assistent", "tredje_part"):
+        with pytest.raises(ValueError, match="anvandare"):
+            sagt.spara({**POST, "talare": t})
+    assert sagt.far_bli_sagt("user") is True
+    for roll in ("assistant", "third", "system", "verktyg", "nonsens"):
+        assert sagt.far_bli_sagt(roll) is False
+
+
+def test_observe_sparar_ratext_men_ger_inget_sagt(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mid = sagt.observe_message("assistant", "Du borde sova mer.")
+    assert mid is not None                              # råtexten loggas ändå
+    assert sagt.hamta("sova") == []                     # men blir aldrig sagt
+    rader = sagt._journal_rader()
+    assert any(r["op"] == "meddelande" and r["far_bli_sagt"] is False for r in rader)
+
+
+def test_tom_inmatning_ger_uttryckligt_utfall(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert sagt.observe_message("user", "   ") is None
+    assert sagt.observe_message("user", "") is None
+    assert sagt._journal_rader() == []                  # inget loggas
+
+
+def test_nfd_matchar_nfc(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    nfd = unicodedata.normalize("NFD", "jag fastar på måndagar")   # å i NFD
+    sagt.spara({**POST, "citat": nfd, "citat_offset": 0, "typ": "handelse"})
+    r = sagt.hamta("måndagar")                          # NFC-sökord
+    assert len(r) == 1
+    assert r[0]["citat"] == unicodedata.normalize("NFC", nfd)      # lagrat som NFC
+
+
+def test_korrigering_gammalt_varde_blir_inaktivt(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    gammalt = sagt.spara({**POST, "citat": "jag tar tabletten två gånger",
+                          "citat_offset": 0, "typ": "handelse", "modalitet": "faktisk"})
+    nytt = sagt.spara({**POST, "citat": "nej förresten, tre gånger", "citat_offset": 0,
+                       "typ": "handelse", "modalitet": "faktisk", "kallmeddelande_id": "m2"})
+    sagt.lanka(nytt, gammalt, "corrects")
+    poster = {p["version_id"]: p for p in sagt.hamta("gånger")}
+    assert poster[gammalt]["aktiv"] is False
+    assert poster[gammalt]["ersatt_av"] == nytt
+    assert poster[nytt]["aktiv"] is True
+    assert poster[gammalt]["linje_id"] == poster[nytt]["linje_id"] == gammalt  # roten
+
+
+def test_lank_mot_okand_post_vagras(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    a = sagt.spara(POST)
+    with pytest.raises(ValueError, match="okänd post"):
+        sagt.lanka(a, "finns_inte", "supersedes")
+
+
+def test_lank_och_meddelande_muterar_aldrig_befintliga_rader(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    a = sagt.spara(POST)
+    b = sagt.spara({**POST, "citat": "en helt annan sak", "citat_offset": 0})
+    fore = sagt.JOURNAL.read_text().splitlines()
+    sagt.lanka(b, a, "supersedes")
+    sagt.observe_message("user", "hej Selvra")
+    efter = sagt.JOURNAL.read_text().splitlines()
+    assert efter[:len(fore)] == fore                    # bara tillägg, inga ändrade rader
+    assert len(efter) == len(fore) + 2
+
+
+def test_ombyggd_vy_lika_med_levande(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    gammalt = sagt.spara({**POST, "citat": "två gånger", "citat_offset": 0, "typ": "handelse"})
+    nytt = sagt.spara({**POST, "citat": "tre gånger", "citat_offset": 0, "typ": "handelse",
+                       "kallmeddelande_id": "m2"})
+    sagt.lanka(nytt, gammalt, "corrects")
+    db = tmp_path / "t.duckdb"
+    sagt.spela_upp(db)
+    with duckdb.connect(str(db), read_only=True) as con:
+        rows = con.execute("select version_id, aktiv, ersatt_av, linje_id from sagt.post").fetchall()
+        lankar = con.execute("select fran, till, rel from sagt.lank").fetchall()
+    live = {p["version_id"]: p for p in sagt._aktuella().values()}
+    for vid, aktiv, ersatt, linje in rows:
+        assert live[vid]["aktiv"] == aktiv
+        assert live[vid]["ersatt_av"] == ersatt
+        assert live[vid]["linje_id"] == linje
+    assert (nytt, gammalt, "corrects") in lankar
