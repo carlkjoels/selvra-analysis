@@ -7,7 +7,7 @@ modellen *är*, i vilken ordning den byggs, och hur den förbättrar sig själv.
 Läses i början av varje session som rör riktning. Uppdateras när ett lager
 byter läge — inte oftare.
 
-Senast uppdaterad: 2026-10-28.
+Senast uppdaterad: 2026-10-31.
 
 ## Modellen i en mening
 
@@ -24,6 +24,21 @@ motorns laboratorium — där varje mening prövas mot riktiga människor — al
 dess produkt. Grafarbete byggs inte nytt; det som finns (morgonvyn) är Carls
 instrument. L4 (andra system frågar Selvra) är därmed huvudspåret, inte
 slutsteget. Förebild i formen: Firstbeat — motorn inuti andras produkter.
+
+## Rollerna — motor, testbädd, granskare (2026-10-31)
+
+Tre delar, tre jobb, aldrig sammanblandade:
+
+- **Selvra är motorn.** Ett minneslager med tre nivåer: *sagt* (personens egna
+  ord, ordagrant), *mätt* (en mätserie bär det) och *prövat* (en låst studie har
+  dömt). Nisch: vården.
+- **Selvra Health är testbädden.** Rapporter och studier — där motorns meningar
+  prövas mot riktiga människor innan de får lämna huset.
+- **serrier är granskaren.** Benchmarkar motorn, mäter rörens trohet, håller
+  registret. serrier gör aldrig eget vin: den dömer andras arbete och
+  producerar inget eget att bära fram. Och eftersom den granskar Selvra
+  redovisas den kopplingen alltid — granskaren utger sig aldrig för att vara
+  oberoende.
 
 ## Lagren
 
@@ -160,3 +175,4 @@ Inte MAU. I ordning:
 - 2026-10-29: Mätlagret in i L0:s förbättringsloop (METODPLAN §6).
 - 2026-10-29: Domstolsprincipen — generator, omutlig domare, minne, dubbel självreferens; flaskhalsen är domen.
 - 2026-10-29: Formen låst — motor, inte yta; meningar till andras grafer; egna ytor är laboratoriet.
+- 2026-10-31: Rollerna — Selvra (motor, nisch vården), Selvra Health (testbädd), serrier (granskare som alltid redovisar kopplingen till Selvra).
