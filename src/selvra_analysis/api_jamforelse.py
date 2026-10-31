@@ -41,6 +41,29 @@ FALT = ["steps", "total_sleep_seconds", "deep_sleep_seconds", "rem_sleep_seconds
         "hr_lowest_bpm", "hrv_avg_ms"]
 GARMIN_EPOCH = datetime(1989, 12, 31)
 
+# Trösklar låsta 2026-10-29 (mätlagret, METODPLAN §6). En "signal" betyder att
+# en hämtväg avviker meningsfullt från klockans egna filer — ett fynd om vägen,
+# inte ett fel i skriptet. Trösklarna är versionerade: den AKTIVA uppsättningen
+# är alltid sista raden i TROSKEL_HISTORIK. Att ändra ett tal = lägga en NY rad
+# med nytt datum. test_troskel_sista_raden_ar_fryst fryser sista raden och
+# failar om ett värde ändras utan en ny datumrad.
+TROSKEL_HISTORIK = [
+    {
+        "datum": "2026-10-29",
+        "somn_min": 15,      # minuter per sömnstadium (total, djup, REM)
+        "somn_andel": 0.10,  # signal om gränsen överskrids på fler än 10 % av nätterna
+        "hrv_ms": 5,         # millisekunder
+        "hrv_andel": 0.10,   # på fler än 10 % av nätterna
+        # steg och vilopuls har ingen talgräns — signalen är strukturell:
+        # flyttad dag (värdet landade på fel dygn) eller saknat värde.
+        "steg_vilopuls": "flyttad dag eller saknat värde",
+    },
+]
+TROSKLAR = TROSKEL_HISTORIK[-1]
+
+SOMNFALT = ("total_sleep_seconds", "deep_sleep_seconds", "rem_sleep_seconds")
+STRUKTURFALT = ("steps", "hr_lowest_bpm")  # bedöms på flyttad dag / saknat värde
+
 
 def _fit_tid(v) -> datetime | None:
     if isinstance(v, datetime):
@@ -219,7 +242,74 @@ def diffa(facit: pd.DataFrame, kallor: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(rader)
 
 
-def rapport(diff: pd.DataFrame, noter: list[str], kallor: list[str]) -> str:
+def _strukturfynd(f: pd.DataFrame, kalla: str, falt: str,
+                  kalladf: pd.DataFrame | None = None) -> tuple[int, int]:
+    """Steg/vilopuls: räkna dagar där facit finns men källan saknar värdet.
+    Finns samma värde (inom tolerans) på en grannedag räknas det som en flyttad
+    dag, annars som saknat värde — båda är en signal. Granndagarna läses helst
+    ur källans fulla serie (kalladf, kolumn=fältnamn); annars ur de facit-dagar
+    som finns i f (kolumn=källans namn)."""
+    if kalladf is not None and "reading_date" in kalladf and falt in kalladf:
+        varden = {r["reading_date"]: r[falt] for _, r in kalladf.iterrows()}
+    else:
+        varden = {r["datum"]: r[kalla] for _, r in f.iterrows()}
+    saknade = flyttade = 0
+    for _, r in f[f["fit"].notna()].iterrows():
+        v = r[kalla]
+        if v is not None and not pd.isna(v):
+            continue
+        facitv = float(r["fit"])
+        tol = max(1.0, 0.05 * abs(facitv))
+        grannar = [varden.get(r["datum"] - timedelta(days=1)),
+                   varden.get(r["datum"] + timedelta(days=1))]
+        if any(g is not None and not pd.isna(g) and abs(float(g) - facitv) <= tol
+               for g in grannar):
+            flyttade += 1
+        else:
+            saknade += 1
+    return saknade, flyttade
+
+
+def bedom_signal(diff: pd.DataFrame,
+                 kallor_df: dict[str, pd.DataFrame] | None = None) -> list[dict]:
+    """Per fält × källa: SIGNAL eller INGEN SIGNAL mot de låsta trösklarna.
+
+    Sömn och HRV: signal om avvikelsen överskrider talgränsen på fler än andelen
+    av nätterna. Steg och vilopuls: signal vid flyttad dag eller saknat värde.
+    Ges källornas fulla serier (kallor_df) kan en flyttad dag ses även utanför
+    facit-dagarna. Returnerar rader {falt, kalla, signal (bool), motivering}."""
+    kallor = [c for c in diff.columns
+              if c not in ("datum", "falt", "fit") and not c.endswith("_diff")]
+    kallor_df = kallor_df or {}
+    ut = []
+    for falt in FALT:
+        f = diff[diff["falt"] == falt]
+        facit_rader = f[f["fit"].notna()]
+        n = len(facit_rader)
+        for kalla in kallor:
+            if falt in SOMNFALT or falt == "hrv_avg_ms":
+                somn = falt in SOMNFALT
+                grans = TROSKLAR["somn_min"] * 60 if somn else TROSKLAR["hrv_ms"]
+                andel_grans = TROSKLAR["somn_andel"] if somn else TROSKLAR["hrv_andel"]
+                visat = TROSKLAR["somn_min"] if somn else TROSKLAR["hrv_ms"]
+                enhet = "min" if somn else "ms"
+                over = facit_rader[facit_rader[f"{kalla}_diff"].abs() > grans]
+                andel = len(over) / n if n else 0.0
+                signal = n > 0 and andel > andel_grans
+                mot = (f"{len(over)}/{n} nätter avviker >{visat} {enhet} "
+                       f"({andel:.0%} mot gräns {andel_grans:.0%})")
+            else:  # steg, vilopuls — strukturellt
+                saknade, flyttade = _strukturfynd(f, kalla, falt, kallor_df.get(kalla))
+                signal = (saknade + flyttade) > 0
+                delar = (([f"{flyttade} flyttad dag"] if flyttade else [])
+                         + ([f"{saknade} saknat värde"] if saknade else []))
+                mot = ", ".join(delar) if delar else "alla dagar på plats"
+            ut.append({"falt": falt, "kalla": kalla, "signal": signal, "motivering": mot})
+    return ut
+
+
+def rapport(diff: pd.DataFrame, noter: list[str], kallor: list[str],
+            signaler: list[dict] | None = None) -> str:
     rader = ["# API-jämförelse: FIT-facit mot API-svar", "",
              (f"*{diff['datum'].nunique()} dagar · källor: {', '.join(kallor)} · "
               "bara aggregat — rådatan bor i data/fit/ (gitignorerad)*"), ""]
@@ -237,6 +327,15 @@ def rapport(diff: pd.DataFrame, noter: list[str], kallor: list[str]) -> str:
     if noter:
         rader += ["## Noter (definitioner, saknade fält, tidszoner)", ""]
         rader += [f"- {n}" for n in noter]
+    signaler = bedom_signal(diff) if signaler is None else signaler
+    bildtext = (f"*sömn >{TROSKLAR['somn_min']} min och HRV >{TROSKLAR['hrv_ms']} ms på "
+                f">{TROSKLAR['somn_andel']:.0%} av nätterna; steg och vilopuls: "
+                f"{TROSKLAR['steg_vilopuls']}*")
+    rader += ["", f"## Signal per mått (trösklar låsta {TROSKLAR['datum']})", "",
+              bildtext, ""]
+    for s in signaler:
+        etikett = "**SIGNAL**" if s["signal"] else "INGEN SIGNAL"
+        rader.append(f"- {s['falt']} · {s['kalla']}: {etikett} — {s['motivering']}")
     return "\n".join(rader) + "\n"
 
 
@@ -272,8 +371,9 @@ def main(argv: list[str] | None = None) -> int:
         kallor["extern"] = las_kalla_json(args.kalla_json)
 
     diff = diffa(facit, kallor)
+    signaler = bedom_signal(diff, kallor)
     UT.parent.mkdir(parents=True, exist_ok=True)
-    UT.write_text(rapport(diff, noter, list(kallor)))
+    UT.write_text(rapport(diff, noter, list(kallor), signaler))
     print(f"skrev {UT} ({len(dagar)} dagar)", file=sys.stderr)
     return 0
 

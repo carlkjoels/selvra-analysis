@@ -57,3 +57,77 @@ def test_rorloggen_beskriver_roret_aldrig_manniskan(tmp_path, monkeypatch) -> No
     assert "Venu 3" in text
     for forbjudet in ("mmol", "bpm_varde", "sleep_seconds_varde"):
         assert forbjudet not in text  # form, aldrig mätvärden
+
+
+# --- Punkt 2: låsta trösklar + SIGNAL/INGEN SIGNAL per mått ---
+
+def test_troskel_sista_raden_ar_fryst() -> None:
+    # Fryst 2026-10-29. Ändra ett tal → lägg en NY datumrad i TROSKEL_HISTORIK
+    # och uppdatera denna frysning medvetet. Annars failar testet — så ingen
+    # tröskel kan glida utan att en datumrad skrivs.
+    assert aj.TROSKLAR["datum"] == "2026-10-29"
+    assert aj.TROSKLAR["somn_min"] == 15
+    assert aj.TROSKLAR["somn_andel"] == 0.10
+    assert aj.TROSKLAR["hrv_ms"] == 5
+    assert aj.TROSKLAR["hrv_andel"] == 0.10
+    assert aj.TROSKLAR["steg_vilopuls"] == "flyttad dag eller saknat värde"
+    assert aj.TROSKLAR is aj.TROSKEL_HISTORIK[-1]  # aktiv = sista raden
+
+
+def test_troskel_datum_unika_och_vaxande() -> None:
+    datum = [r["datum"] for r in aj.TROSKEL_HISTORIK]
+    assert datum == sorted(datum)
+    assert len(datum) == len(set(datum))
+
+
+def _diff(kalla: pd.DataFrame) -> pd.DataFrame:
+    return aj.diffa(FACIT, {"api": kalla})
+
+
+def test_somn_signal_over_troskeln() -> None:
+    # 1 natt, djupsömn 20 min (1200 s) under facit → >15 min → 1/1 = 100 % > 10 %
+    kalla = FACIT.copy()
+    kalla["deep_sleep_seconds"] = 5400 - 1200
+    s = {r["falt"]: r for r in aj.bedom_signal(_diff(kalla))}
+    assert s["deep_sleep_seconds"]["signal"] is True
+
+
+def test_somn_ingen_signal_under_troskeln() -> None:
+    # avvikelse 10 min (600 s) < 15 min → ingen signal
+    kalla = FACIT.copy()
+    kalla["deep_sleep_seconds"] = 5400 - 600
+    s = {r["falt"]: r for r in aj.bedom_signal(_diff(kalla))}
+    assert s["deep_sleep_seconds"]["signal"] is False
+
+
+def test_hrv_signal_over_fem_ms() -> None:
+    kalla = FACIT.copy()
+    kalla["hrv_avg_ms"] = 70.0 - 6  # 6 ms > 5 ms
+    s = {r["falt"]: r for r in aj.bedom_signal(_diff(kalla))}
+    assert s["hrv_avg_ms"]["signal"] is True
+
+
+def test_steg_saknat_varde_ar_signal() -> None:
+    kalla = FACIT.copy()
+    kalla["steps"] = None  # facit finns, källan saknar → signal
+    s = {r["falt"]: r for r in aj.bedom_signal(_diff(kalla))}
+    assert s["steps"]["signal"] is True
+    assert "saknat värde" in s["steps"]["motivering"]
+
+
+def test_steg_flyttad_dag_ar_signal() -> None:
+    # facit har steg på 30/10; källan har samma värde på 29/10, inget på 30/10
+    facit = pd.DataFrame([{"reading_date": date(2026, 10, 30), "steps": 8000}])
+    kalla = pd.DataFrame([{"reading_date": date(2026, 10, 29), "steps": 8000}])
+    s = {r["falt"]: r
+         for r in aj.bedom_signal(aj.diffa(facit, {"api": kalla}), {"api": kalla})}
+    assert s["steps"]["signal"] is True
+    assert "flyttad dag" in s["steps"]["motivering"]
+
+
+def test_rapporten_slutar_med_signal_per_matt() -> None:
+    text = aj.rapport(_diff(FACIT.copy()), [], ["api"])
+    assert "## Signal per mått" in text
+    assert "INGEN SIGNAL" in text  # identiska värden → ingen signal
+    # signalavsnittet ligger sist
+    assert text.rstrip().endswith(text.rstrip().split("## Signal per mått")[-1].rstrip())
