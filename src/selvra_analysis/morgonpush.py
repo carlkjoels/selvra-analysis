@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives import serialization
 from py_vapid import Vapid01
 from pywebpush import WebPushException, webpush
 
-from selvra_analysis import granska
+from selvra_analysis import granska, sagt
 from selvra_analysis import study as st
 from selvra_analysis.forslag import forslagsrad
 from selvra_analysis.ingest_garmin import load as load_garmin
@@ -231,6 +231,10 @@ def _report(person: str, fetch: bool) -> dict:
         prad = fit_paminnelse(today)
         if prad:
             body = body.rstrip() + "\n\n" + prad + "\n"
+    # Logga det SÄNDA brevet som Selvras egna ord (bara Carl, bara vid sändning)
+    # så maskningen hindrar att ett citerat brev blir ett sagt-påstående.
+    if fetch and person == "carl":
+        sagt.logga_selvra_text(body)
     return payload(subject, body, today)
 
 

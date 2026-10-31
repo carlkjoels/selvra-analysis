@@ -147,6 +147,17 @@ def mask_selvra_quotes(text: str, korpus: list[str] | None = None) -> str:
     return "".join(ut)
 
 
+def logga_selvra_text(text: str, kalla: str = "morgonbrev") -> str | None:
+    """Logga en Selvra-egen text (t.ex. ett SÄNT morgonbrev) som ett assistant-
+    meddelande, så att maskningen även täcker citat ur den. Dedup: samma text
+    loggas inte två gånger (morgonkörningen blir idempotent). Returnerar
+    meddelande-id, eller None om texten var tom eller redan fanns i korpusen."""
+    ren = _nfc(text).strip()
+    if not ren or ren in _selvra_korpus():
+        return None
+    return observe_message("assistant", text, kalla=kalla)
+
+
 def spara(post: dict) -> str:
     """Ny sagt-post. Citatet är obligatoriskt och heligt; enums valideras hårt.
     Returnerar id. Detta är modulens ENDA väg in för nytt innehåll."""

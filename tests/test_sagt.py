@@ -322,3 +322,15 @@ def test_kort_overlapp_med_brev_maskas_inte(tmp_path, monkeypatch) -> None:
     pid = sagt.spara({**POST, "citat": "7 timmar", "citat_offset": 0,   # < MIN_MASK
                       "typ": "handelse", "modalitet": "faktisk"})
     assert pid                                        # kort överlapp spärras inte
+
+
+def test_logga_selvra_brev_matar_korpusen_och_dedupar(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    brev = "God morgon. Du sov 7 timmar och 12 minuter i natt, inom ditt vanliga."
+    assert sagt.logga_selvra_text(brev) is not None
+    assert sagt.logga_selvra_text(brev) is None         # dedup: loggas inte igen
+    assert sagt.ar_selvra_citat("Du sov 7 timmar och 12 minuter i natt") is True
+    with pytest.raises(ValueError, match="återkopplingsslingan"):   # citat ur brevet
+        sagt.spara({**POST, "citat": "Du sov 7 timmar och 12 minuter i natt",
+                    "citat_offset": 0, "typ": "handelse", "modalitet": "faktisk"})
+    assert sagt.logga_selvra_text("") is None           # tom → None
