@@ -100,10 +100,13 @@ def read_glucose(db: Path) -> pd.DataFrame:
 
 NATT_MIN_AVLASNINGAR = 36      # halva natten 00–06 vid 5-minutersgrid
 FONSTER_MIN_AVLASNINGAR = 20   # per 3-timmarsfönster för formraden
+LAGT_MMOL = 4.0                # säkerhetsgolv: nattraden visas bara vid ett lågt värde
 
 
 def _natt_rad(db: Path, today: date) -> str | None:
-    """Nattens glukos 00–06 — raden en T1:a letar efter först. Tystnad utan täckning."""
+    """Säkerhetsgolvet: nattens 00–06 lyfts BARA när glukosen gick under 4 mmol/L
+    — en lågepisod en T1:a måste se. En lugn natt (snittet inom det vanliga) är
+    tystnad, inte en rad. Tystnad utan täckning."""
     try:
         with duckdb.connect(str(db), read_only=True) as con:
             r = con.execute(
@@ -115,9 +118,11 @@ def _natt_rad(db: Path, today: date) -> str | None:
     if len(r) < NATT_MIN_AVLASNINGAR:
         return None
     lagst = r.loc[r["glucose_mmol"].idxmin()]
+    if lagst["glucose_mmol"] >= LAGT_MMOL:   # ingen lågepisod → ingen rad
+        return None
     kl = pd.to_datetime(lagst["reading_at_local"]).strftime("%H:%M")
-    return (f"CGM:n i natt 00–06: snitt {r['glucose_mmol'].mean():.1f} mmol/L, "
-            f"lägsta {lagst['glucose_mmol']:.1f} kl {kl}").replace(".", ",")
+    return (f"I natt (00–06) gick CGM:n ned till {lagst['glucose_mmol']:.1f} mmol/L kl {kl}"
+            ).replace(".", ",")
 
 
 def _form_rad(db: Path, yesterday: date) -> str | None:
@@ -179,9 +184,10 @@ def _handelse_rad(db: Path, yesterday: date) -> str | None:
 
 
 def extrarader(db: Path, today: date, glukos: pd.DataFrame | None) -> list[str]:
-    """Berikningsraderna, var och en bakom sin egen täckningsgrind."""
-    kandidater = [_natt_rad(db, today), _form_rad(db, today - timedelta(days=1)),
-                  _svit_rad(glukos, today), _handelse_rad(db, today - timedelta(days=1))]
+    """Essens-raderna: säkerhetsgolvet (nattens lågvärde) och gårdagens loggade
+    händelser (kontext till en avvikelse). Streak-raden och inom-dags-formraden
+    hör till detaljvyn, inte morgonens glans — så de är inte med här."""
+    kandidater = [_natt_rad(db, today), _handelse_rad(db, today - timedelta(days=1))]
     return [r + "." for r in kandidater if r]
 
 
@@ -197,15 +203,18 @@ def _sync_line(df: pd.DataFrame, today: date) -> str | None:
     return None
 
 
-def _measure_line(m: Measure, value: float, history: pd.Series, stage2: bool) -> str:
+def _measure_line(m: Measure, value: float, history: pd.Series, stage2: bool) -> tuple[str, str]:
+    """Raden + var värdet låg mot det egna normala: 'över'/'under'/'inom', eller
+    '' i inlärningsfasen (inget band än). Essensen visar bara avvikelser."""
     text = m.sentence.format(_short(m, value))
     if history.empty:
-        return text + "."
+        return text + ".", ""
     if stage2:
         lo, hi = history.quantile(0.1), history.quantile(0.9)
         where = "över" if value > hi else "under" if value < lo else "inom"
-        return text + f", {where} ditt vanliga {_short(m, lo)}–{_short(m, hi)}{m.unit}."
-    return text + f". Hittills brukar det vara {_short(m, history.median())}{m.unit} ({len(history)} dagar)."
+        return text + f", {where} ditt vanliga {_short(m, lo)}–{_short(m, hi)}{m.unit}.", where
+    return (text + f". Hittills brukar det vara {_short(m, history.median())}{m.unit} "
+            f"({len(history)} dagar).", "")
 
 
 def compose(name: str, df: pd.DataFrame, today: date,
@@ -221,7 +230,9 @@ def compose(name: str, df: pd.DataFrame, today: date,
     if warn and not (df.empty and har_glukos):
         # En CGM-person utan klocka ännu ska inte mötas av en klockvarning varje morgon.
         lines += [warn, ""]
-    shown = 0
+    glukos_dagar = int(glukos["mean_mmol"].notna().sum()) if har_glukos else 0
+    i_stage2 = max(n_days, glukos_dagar) >= STAGE2_DAYS
+    shown, doldes = 0, False
     kallor = ([(m, glukos) for m in GLUKOS_MEASURES] if har_glukos else []) \
         + [(m, df) for m in MEASURES]
     for m, frame in kallor:
@@ -232,15 +243,26 @@ def compose(name: str, df: pd.DataFrame, today: date,
             continue
         # The person's last BASELINE_DAYS days *with data*: a sync gap must not empty the baseline.
         hist = frame.loc[frame["reading_date"] < day, m.column].dropna().tail(BASELINE_DAYS)
-        lines.append("- " + _measure_line(m, float(row[m.column].iloc[0]), hist, len(hist) >= STAGE2_DAYS))
+        line, where = _measure_line(m, float(row[m.column].iloc[0]), hist, len(hist) >= STAGE2_DAYS)
+        if where == "inom":        # essens: det som låg inom det egna normala tigs
+            doldes = True
+            continue
+        lines.append("- " + line)
         shown += 1
     for rad in (extra or []):
         lines.append("- " + rad)
         shown += 1
-    if not shown:
+    # Essens-avslutning: säg att resten låg inom det vanliga, lista det inte.
+    if i_stage2 and not shown:
+        lines.append("I går låg allt inom ditt vanliga.")
+    elif i_stage2 and doldes:
+        lines.append("Resten låg inom ditt vanliga.")
+    elif not shown:
         lines.append("Inga nya värden för i går och i natt ännu.")
-    lines += ["", _stage_footer(n_days if not har_glukos else max(n_days, int(glukos["mean_mmol"].notna().sum()))),
-              "", "Selvra"]
+    # Inlärningsfas-fotnoten bara medan det egna normala växer fram — inte dagligt brus.
+    if not i_stage2:
+        lines += ["", _stage_footer(max(n_days, glukos_dagar))]
+    lines += ["", "Selvra"]
     subject = f"Selvra {WEEKDAYS[today.weekday()]} {today.day}/{today.month}" \
         + (" – klockan har inte synkat" if warn and not (df.empty and har_glukos) else "")
     return subject, "\n".join(lines) + "\n"

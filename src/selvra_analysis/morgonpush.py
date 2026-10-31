@@ -213,11 +213,8 @@ def _report(person: str, fetch: bool) -> dict:
     glukos = read_glucose(paths["db"])
     subject, body = compose(conf["namn"], read_days(paths["db"]), today,
                             glukos=glukos, extra=extrarader(paths["db"], today, glukos))
-    if person == "carl" and not glukos.empty:
-        body = body.rstrip() + "\n\nAGP-vyn uppdaterad i morse: selvra-morgonvy.html i Downloads.\n"
-    frad = _framstegsrad_for(person, paths)
-    if frad:
-        body = body.rstrip() + "\n\n" + frad + "\n"
+    # Essens: AGP-vyn (selvra-morgonvy.html i Downloads) och par-framstegsraden
+    # hör till detaljvyn, inte morgonens glans — de läggs inte i brevet.
     trad = trendrad(person, paths["db"], today, skriv=fetch)
     if trad:
         body = body.rstrip() + "\n\n" + trad + "\n"

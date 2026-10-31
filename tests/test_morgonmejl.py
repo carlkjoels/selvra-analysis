@@ -30,8 +30,10 @@ def test_first_days_mirror_against_the_average_so_far() -> None:
 
 
 def test_after_two_weeks_the_persons_own_range_is_used() -> None:
-    _, body = compose("Kari", days(30, TODAY), TODAY)
-    assert re.search(r"(inom|över|under) ditt vanliga", body)
+    df = days(30, TODAY)
+    df.loc[df["reading_date"] == TODAY - timedelta(days=1), "steps"] = 20000.0  # avvikelse i går
+    _, body = compose("Kari", df, TODAY)
+    assert re.search(r"(över|under) ditt vanliga", body)   # essens visar bara avvikelser
 
 
 def test_a_watch_that_has_not_synced_is_said_first() -> None:
@@ -48,7 +50,8 @@ def test_never_advice() -> None:
 def test_a_long_sync_gap_does_not_empty_the_baseline() -> None:
     """Weeks without sync, then two days: the baseline is the last days with data, not the calendar."""
     df = pd.concat([days(28, date(2026, 8, 30), seed=3), days(2, TODAY, seed=4)]).reset_index(drop=True)
+    df.loc[df["reading_date"] == TODAY - timedelta(days=1), "hr_lowest_bpm"] = 60.0  # avvikelse (ett tal) → bandet visas
     _, body = compose("Kari", df, TODAY)
-    ranges = re.findall(r"ditt vanliga (\S+)–(\S+)", body)
+    ranges = re.findall(r"ditt vanliga (\d+)–(\d+)", body)
     assert ranges
     assert all(lo != hi for lo, hi in ranges)

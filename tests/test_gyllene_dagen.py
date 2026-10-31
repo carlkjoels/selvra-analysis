@@ -159,11 +159,11 @@ def test_reserven_ar_rapportens_eget_svar():
 def test_cgm_rader_forst_med_egna_band():
     """En CGM-person ser glukossnitt + målområde först, mot sina egna percentiler,
     och möts inte av klockvarning innan klockan ens finns."""
-    glukos = pd.DataFrame({
-        "reading_date": [IDAG - timedelta(days=i) for i in range(29, 0, -1)],
-        "mean_mmol": [9.0 + (i % 5) * 0.5 for i in range(29)],
-        "tir_pct": [60.0 + (i % 4) * 5 for i in range(29)],
-    })
+    dagar = [IDAG - timedelta(days=i) for i in range(29, 0, -1)]
+    mean = [9.0 + (i % 5) * 0.5 for i in range(29)]
+    tir = [60.0 + (i % 4) * 5 for i in range(29)]
+    mean[-1], tir[-1] = 14.5, 25.0   # i går avvek tydligt → essensen visar raderna
+    glukos = pd.DataFrame({"reading_date": dagar, "mean_mmol": mean, "tir_pct": tir})
     subject, body = mm.compose("Carl", pd.DataFrame(), IDAG, glukos=glukos)
     assert "glukossnittet" in body
     assert "målområdet" in body
@@ -219,3 +219,40 @@ def test_framstegsraden_ar_akta_aldrig_fabricerad() -> None:
     assert mm.framstegsrad(12, 12, "x") is None
     assert mm.framstegsrad(15, 12, "x") is None
     assert mm.framstegsrad(5, 0, "x") is None
+
+
+def _lugn(antal: int = 20, idag: date = IDAG) -> pd.DataFrame:
+    """Lugna dagar med konstanta värden, så i går/i natt ligger inom det egna bandet."""
+    return pd.DataFrame([{
+        "reading_date": idag - timedelta(days=i), "sleep_score": 80, "readiness_score": 70,
+        "total_sleep_seconds": 25200, "deep_sleep_seconds": 5400, "rem_sleep_seconds": 4800,
+        "sleep_efficiency_pct": 90.0, "hrv_avg_ms": 85.0, "hr_lowest_bpm": 52.0, "steps": 6000,
+    } for i in range(antal - 1, -1, -1)])
+
+
+def test_essens_tiger_om_allt_ligger_inom_vanliga() -> None:
+    _, body = mm.compose("Kari", _lugn(), IDAG)
+    assert "I går låg allt inom ditt vanliga." in body
+    assert "- " not in body            # inga faktarader
+    assert "steg i går" not in body
+    assert "vilopulsen" not in body
+    assert "i rad" not in body         # ingen streak (konstitutionen)
+    assert "Selvra har" not in body    # ingen inlärnings-fotnot i stage2
+
+
+def test_essens_visar_bara_avvikelsen() -> None:
+    df = _lugn()
+    df.loc[df["reading_date"] == IDAG - timedelta(days=1), "steps"] = 16000  # i går avvek
+    _, body = mm.compose("Kari", df, IDAG)
+    assert "16 000 steg" in body
+    assert "över ditt vanliga" in body
+    assert "vilopulsen" not in body    # inom → tyst
+    assert "Resten låg inom ditt vanliga." in body
+
+
+def test_essens_inlarningsfas_visar_matt_och_fotnot() -> None:
+    _, body = mm.compose("Kari", _lugn(antal=8), IDAG)   # < STAGE2_DAYS
+    assert "steg i går" in body                          # inlärning: måtten visas
+    assert "Hittills brukar det vara" in body
+    assert "Selvra har" in body                          # inlärnings-fotnoten kvar
+    assert "inom ditt vanliga" not in body               # inget band än
