@@ -17,8 +17,8 @@ POST = {"typ": "intention", "kalla": "morgonsvar", "kallmeddelande_id": "m1",
 def test_api_saknar_mutationsvagar() -> None:
     """Inget LLM-steg kan uppdatera eller radera: funktionerna finns inte."""
     publika = [n for n in dir(sagt) if not n.startswith("_")]
-    for farligt in ("update", "uppdatera_post", "radera", "ta_bort", "delete", "skriv_over"):
-        assert not any(farligt in n for n in publika if n != "uppgradera_status"), farligt
+    for farligt in ("update", "uppdatera", "radera", "ta_bort", "delete", "skriv_over"):
+        assert not any(farligt in n for n in publika), farligt
 
 
 def test_post_utan_citat_avvisas(tmp_path, monkeypatch) -> None:
@@ -35,16 +35,31 @@ def test_journalen_vaxer_bara_och_dubbletter_ar_noop(tmp_path, monkeypatch) -> N
     assert len(sagt._journal_rader()) == n1  # ingen ny rad
 
 
-def test_status_kraver_evidens_aldrig_modellsakerhet(tmp_path, monkeypatch) -> None:
+def test_status_harleds_ur_evidens_aldrig_modellsakerhet(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     pid = sagt.spara(POST)
-    with pytest.raises(ValueError, match="evidens"):
-        sagt.uppgradera_status(pid, "matt", {"typ": "modellen_ar_saker", "referens": "x"})
-    with pytest.raises(ValueError, match="hoppar"):
-        sagt.uppgradera_status(pid, "provat", {"typ": "matserie", "referens": "steg 14 d"})
-    sagt.uppgradera_status(pid, "matt", {"typ": "matserie", "referens": "steg 14 d"})
-    sagt.uppgradera_status(pid, "provat", {"typ": "last_studie", "referens": "003"})
+    assert sagt._status(pid) == "sagt"                 # ingen evidens → sagt
+    with pytest.raises(ValueError, match="evidens"):   # modellsäkerhet är inte evidens
+        sagt.koppla_evidens(pid, {"typ": "modellen_ar_saker", "referens": "x"})
+    sagt.koppla_evidens(pid, {"typ": "matserie", "referens": "steg 14 d"})
+    assert sagt._status(pid) == "matt"                 # mätserie → mätt
+    sagt.koppla_evidens(pid, {"typ": "last_studie", "referens": "003"})
+    assert sagt._status(pid) == "provat"               # låst studie → prövat
+
+
+def test_indragen_evidens_sanker_status_utan_omskrivning(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    pid = sagt.spara(POST)
+    sagt.koppla_evidens(pid, {"typ": "matserie", "referens": "steg 14 d"})
+    sagt.koppla_evidens(pid, {"typ": "last_studie", "referens": "003"})
     assert sagt._status(pid) == "provat"
+    fore = sagt.JOURNAL.read_text().splitlines()
+    sagt.dra_tillbaka_evidens(pid, "003")              # studien dras tillbaka
+    assert sagt._status(pid) == "matt"                 # faller ett steg (TMS)
+    sagt.dra_tillbaka_evidens(pid, "steg 14 d")        # mätserien dras tillbaka
+    assert sagt._status(pid) == "sagt"                 # faller tillbaka helt
+    efter = sagt.JOURNAL.read_text().splitlines()
+    assert efter[:len(fore)] == fore                   # inget skrevs om, bara tillägg
 
 
 def test_aterspelningen_bar_bekraftelse_och_status(tmp_path, monkeypatch) -> None:
@@ -116,10 +131,10 @@ def test_hamta_bar_evidens_och_bekraftelse(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     pid = sagt.spara(POST)
     sagt.bekrafta(pid, "2026-11-01T07:00:00Z")
-    sagt.uppgradera_status(pid, "matt", {"typ": "matserie", "referens": "steg 14 d"})
+    sagt.koppla_evidens(pid, {"typ": "matserie", "referens": "steg 14 d"})
     r = sagt.hamta("promenera")[0]
     assert r["status"] == "matt"
-    assert r["evidens"]["referens"] == "steg 14 d"
+    assert r["evidens"][0]["referens"] == "steg 14 d"   # evidens är nu en lista
     assert r["bekraftad_av_anvandaren_vid"] == "2026-11-01T07:00:00Z"
 
 

@@ -7,10 +7,11 @@ Dialoglagrets sanningskälla (FAS 0, 2026-10-29). Tre regler bär allt:
    DuckDB-schemat `sagt` är en återspelning som kan byggas om när som helst.
 2. **Citatet är heligt.** Varje post bär användarens exakta ord (citat +
    offset i källmeddelandet). En post utan citat avvisas i kod.
-3. **Status uppgraderas av evidens, aldrig av modellsäkerhet.** sagt → mätt →
-   prövat kräver en länkad evidenspost (mätserie eller låst studie), ett steg
-   i taget. Ingen LLM-utdata kan röra en befintlig rad — bara lägga nya
-   poster, som i sin tur väntar på användarens bekräftelse.
+3. **Status HÄRLEDS ur evidens-länkar, aldrig ur modellsäkerhet.** sagt → mätt →
+   prövat lagras inte som ett muterbart fält; det räknas fram ur evidens-länkar
+   (matserie → mätt, last_studie → prövat) i uppspelningen. Dras evidensen
+   tillbaka faller statusen av sig själv (justifikationsbaserat, TMS). Ingen
+   LLM-utdata kan röra en befintlig rad — bara lägga nya poster och länkar.
 
 Vad detta INTE är: ingen extern minnesmotor, ingen sammanfattning som
 ersätter orden, ingen tolkning med skrivrätt. Modellen föreslår poster;
@@ -43,10 +44,11 @@ MODALITETER = ("faktisk", "avsedd", "hypotetisk", "annans_rost", "osaker")
 # kod; en modell får aldrig välja den.
 ROLLER = ("user", "assistant", "third", "system", "verktyg")
 ROLL_TILL_TALARE = {"user": "anvandare", "assistant": "assistent", "third": "tredje_part"}
-# Typade länkar (append-only). Modellen får föreslå en länk mellan två bestämda
-# poster; den redigerar eller slår aldrig ihop. supersedes/corrects gör en post
-# inaktiv; contradicts löses aldrig i kod; evidences bär status (härledning i
-# egen skiva, se uppgradera_status tills vidare).
+# Typade länkar (append-only). Modellen får föreslå en länk; den redigerar eller
+# slår aldrig ihop. supersedes/corrects gör en post inaktiv; contradicts löses
+# aldrig i kod; context_differs bär en kvalificerare. De fyra går post↔post via
+# lanka(). evidences kopplar en post till en mätserie/studie (inte en post) via
+# koppla_evidens() — status HÄRLEDS ur den.
 RELER = ("supersedes", "corrects", "contradicts", "context_differs", "evidences")
 # Vem som yttrade citatet. Sätts ALLTID av koden utifrån meddelandets roll,
 # aldrig av en modell — polariteten/modaliteten kan en modell föreslå, men
@@ -141,31 +143,41 @@ def bekrafta(pid: str, vid: str) -> None:
     _skriv({"op": "bekraftelse", "id": pid, "vid": vid})
 
 
-def uppgradera_status(pid: str, ny_status: str, evidens: dict) -> None:
-    """sagt → mätt → prövat: bara via länkad evidens, ett steg i taget.
-    Modellens säkerhet är inte evidens och har ingen väg in här."""
-    if ny_status not in STATUSAR[1:]:
-        raise ValueError(f"okänd status: {ny_status}")
+def koppla_evidens(pid: str, evidens: dict) -> None:
+    """Koppla evidens till en post (op=evidens, append-only). Status HÄRLEDS ur
+    sådana länkar — matserie → mätt, last_studie → prövat — och skrivs aldrig
+    direkt. Modellsäkerhet är inte evidens och har ingen väg in."""
     if not isinstance(evidens, dict) or evidens.get("typ") not in EVIDENSTYPER \
             or not str(evidens.get("referens", "")).strip():
-        raise ValueError("statusuppgradering kräver evidens: "
-                         "{typ: matserie|last_studie, referens: ...}")
-    nuvarande = _status(pid)
-    if nuvarande is None:
+        raise ValueError("evidens kräver {typ: matserie|last_studie, referens: ...}")
+    if pid not in _aktuella():
         raise ValueError(f"ingen post {pid}")
-    if STATUSAR.index(ny_status) != STATUSAR.index(nuvarande) + 1:
-        raise ValueError(f"{nuvarande} → {ny_status} hoppar i trappan")
-    _skriv({"op": "status", "id": pid, "status": ny_status, "evidens": evidens,
+    _skriv({"op": "evidens", "id": pid,
+            "evidens": {"typ": evidens["typ"], "referens": str(evidens["referens"])},
             "vid": datetime.now(UTC).isoformat(timespec="seconds")})
+
+
+def dra_tillbaka_evidens(pid: str, referens: str) -> None:
+    """Dra tillbaka en evidenslänk (op=evidens_retur, append-only). Statusen
+    faller av sig själv i uppspelningen — ingen post skrivs om (TMS)."""
+    _skriv({"op": "evidens_retur", "id": pid, "referens": str(referens),
+            "vid": datetime.now(UTC).isoformat(timespec="seconds")})
+
+
+POST_RELER = ("supersedes", "corrects", "contradicts", "context_differs")  # post↔post
 
 
 def lanka(fran: str, till: str, rel: str) -> None:
     """Typad länk mellan två befintliga poster (append-only, op=lank). Modellen
     får FÖRESLÅ; koden skriver bara länken och redigerar aldrig en post.
     supersedes/corrects gör `till` inaktiv (ersatt av `fran`); contradicts löses
-    aldrig i kod; evidences bär status (härledning i egen skiva)."""
-    if rel not in RELER:
-        raise ValueError(f"rel måste vara en av {RELER}, fick {rel!r}")
+    aldrig i kod. evidences går inte här — evidens är inte en post, använd
+    koppla_evidens (status härleds ur den)."""
+    if rel == "evidences":
+        raise ValueError("evidences kopplar en post till en mätserie/studie, "
+                         "inte till en post — använd koppla_evidens")
+    if rel not in POST_RELER:
+        raise ValueError(f"rel måste vara en av {POST_RELER}, fick {rel!r}")
     if fran == till:
         raise ValueError("en länk måste gå mellan två olika poster")
     aktuella = _aktuella()
@@ -177,50 +189,66 @@ def lanka(fran: str, till: str, rel: str) -> None:
 
 
 def _status(pid: str) -> str | None:
-    status = None
-    for r in _journal_rader():
-        if r.get("id") != pid:
-            continue
-        if r["op"] == "post" or r["op"] == "status":
-            status = r["status"]
-    return status
+    """Härledd status (ur evidens-länkar), eller None om posten inte finns."""
+    p = _aktuella().get(pid)
+    return p["status"] if p else None
 
 
-def _aktuella() -> dict[str, dict]:
-    """Journalen reducerad till varje posts aktuella tillstånd. Sanningen är
-    journalen; detta är bara dess uppspelning (status, evidens, bekräftelse)."""
-    poster: dict[str, dict] = {}
-    for r in _journal_rader():
-        if r["op"] == "post":
-            poster[r["id"]] = dict(r)
-            # poster från före talare-fältet var alltid användarens egna ord
-            poster[r["id"]].setdefault("talare", "anvandare")
-        elif r["op"] == "status" and r["id"] in poster:
-            poster[r["id"]]["status"] = r["status"]
-            poster[r["id"]]["evidens"] = r["evidens"]
-        elif r["op"] == "bekraftelse" and r["id"] in poster:
-            poster[r["id"]]["bekraftad_av_anvandaren_vid"] = r["vid"]
+def _harled_status(poster: dict[str, dict], rader: list[dict]) -> None:
+    """Status ur evidens-länkar (op=evidens minus op=evidens_retur): last_studie
+    → provat, matserie → matt, inget → sagt. Dras evidensen tillbaka faller
+    statusen av sig själv (TMS). Legacy op=status läses som en evidens."""
+    evidens_per: dict[str, dict[str, str]] = {}   # pid → {referens: typ}
+    for r in rader:
+        pid = r.get("id")
+        if r["op"] == "evidens" and pid in poster:
+            evidens_per.setdefault(pid, {})[r["evidens"]["referens"]] = r["evidens"]["typ"]
+        elif r["op"] == "evidens_retur" and pid in poster:
+            evidens_per.get(pid, {}).pop(r.get("referens"), None)
+        elif r["op"] == "status" and pid in poster and r.get("evidens"):  # legacy
+            evidens_per.setdefault(pid, {})[r["evidens"]["referens"]] = r["evidens"]["typ"]
+    for pid, p in poster.items():
+        typer = set(evidens_per.get(pid, {}).values())
+        p["status"] = ("provat" if "last_studie" in typer
+                       else "matt" if "matserie" in typer else "sagt")
+        p["evidens"] = ([{"typ": t, "referens": ref}
+                         for ref, t in evidens_per.get(pid, {}).items()] or None)
 
-    # Härled aktiv/ersatt_av/linje_id/version_id ur supersedes/corrects-länkar.
-    # Inget skrivs om i journalen — detta är ren uppspelning, så gamla poster
-    # (från före länkarna) får aktiv=True, ersatt_av=None, linje_id=egen id.
+
+def _harled_aktiv(poster: dict[str, dict], rader: list[dict]) -> None:
+    """aktiv/ersatt_av/linje_id/version_id ur supersedes/corrects-länkar. Ren
+    uppspelning — inget skrivs om; gamla poster får aktiv=True, linje_id=egen id."""
     ersatt_av: dict[str, str] = {}   # till → fran  (till ersatt av nyare fran)
     ersatter: dict[str, str] = {}    # fran → till  (fran ersätter äldre till)
-    for r in _journal_rader():
+    for r in rader:
         if r.get("op") == "lank" and r.get("rel") in ("supersedes", "corrects") \
                 and r["to"] in poster and r["from"] in poster:
             ersatt_av[r["to"]] = r["from"]
             ersatter[r["from"]] = r["to"]
     for pid, p in poster.items():
-        rot = pid                      # linje_id = roten (äldsta) i kedjan, stabilt
-        sedda = {pid}
+        rot, sedda = pid, {pid}        # linje_id = roten (äldsta) i kedjan, stabilt
         while rot in ersatter and ersatter[rot] not in sedda:
             rot = ersatter[rot]
             sedda.add(rot)
-        p["version_id"] = pid
-        p["linje_id"] = rot
+        p["version_id"], p["linje_id"] = pid, rot
         p["ersatt_av"] = ersatt_av.get(pid)
         p["aktiv"] = pid not in ersatt_av
+
+
+def _aktuella() -> dict[str, dict]:
+    """Journalen reducerad till varje posts aktuella tillstånd. Sanningen är
+    journalen; detta är bara dess uppspelning (status, evidens, länkar, bekräftelse)."""
+    rader = _journal_rader()
+    poster: dict[str, dict] = {}
+    for r in rader:
+        if r["op"] == "post":
+            poster[r["id"]] = dict(r)
+            # poster från före talare-fältet var alltid användarens egna ord
+            poster[r["id"]].setdefault("talare", "anvandare")
+        elif r["op"] == "bekraftelse" and r["id"] in poster:
+            poster[r["id"]]["bekraftad_av_anvandaren_vid"] = r["vid"]
+    _harled_status(poster, rader)
+    _harled_aktiv(poster, rader)
     return poster
 
 
