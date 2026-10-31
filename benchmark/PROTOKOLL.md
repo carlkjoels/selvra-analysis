@@ -30,6 +30,17 @@ När granskning och facit är oense avgör en oberoende beräkning ur scenariots
 sanna parametrar (t.ex. simulerad sann styrka) — aldrig granskningens egen
 skattning, och aldrig en språkmodells bedömning.
 
+## 3b. En utforskande blick förbrukar sina dagar
+
+`utforskande_samband` (regression, METODPLAN) får titta på historisk data för att
+*föreslå* frågor — men de dagar den rangordnat på är därmed förbrukade för
+bekräftelse. **En fråga därifrån får bara prövas på data insamlad EFTER att
+studien låsts.** Låsflödet (`study.lock`) läser de analyserade fönstren
+(`data/samband_fonster.json`) och vägrar en studie vars datafönster överlappar.
+Utan den regeln blir skannern ett sätt att kika på svaret innan regeln låses, och
+domstolsprincipen faller — det är den viktigaste spärren kring det utforskande
+lagret.
+
 ## 4. Dolda uppsättningar förbrukas och roteras
 
 - En dold uppsättning är ett ärligt mått **en** gång. Rättas granskningen efter

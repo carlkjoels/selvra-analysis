@@ -237,11 +237,25 @@ PROTOKOLL, och ett modellbyte markerar seriebrott i serierna den rört.
 ## Regression — bara i skannern och faktoranalysen, aldrig i domen
 
 Regression är ett generator- och utforskningsverktyg, inte en domare. Den får
-bo på exakt två ställen — **skannern** (för att föreslå frågor) och
-**faktoranalysen** (det utforskande faktorurvalet) — och aldrig i den
-konfirmerande körningen eller i håller/motbevisad/obestämd. Samma gräns som
-ML-reglerna, av samma skäl: det som föreslår får vara rikt, det som dömer måste
-vara förregistrerat och citerbart.
+bo på exakt två ställen — **skannern** (för att föreslå frågor) och **det
+utforskande sambandet** (`utforskande_samband`, förvalda faktorer mot ett
+utfall) — och aldrig i den konfirmerande körningen eller i
+håller/motbevisad/obestämd. Samma gräns som ML-reglerna, av samma skäl: det som
+föreslår får vara rikt, det som dömer måste vara förregistrerat och citerbart.
+
+`utforskande_samband` (byggd 2026-10-31) bär fyra spärrar: allt märkt observerat
+(GRADE: låg); faktorer valda i förväg i `faktorer.yml` (förbjudna kolumner —
+insulin, kolhydratkvoter, hypobehandling m.m. — vägras i kod); tidsordning
+inbyggd (faktor dag t mot utfall natten t→t+1, aldrig del av utfallet); och en
+datagräns — de dagar den rangordnat på är förbrukade, så en fråga därifrån får
+bara prövas på data efter låsning (låsflödet vägrar överlapp, PROTOKOLL §3b).
+Metod: OLS + cirkulär block-bootstrap (dag-beroende), firmwarebyte redovisas
+före/efter separat. Under `min_dagar`: "inget underlag", ingen rangordning.
+
+**Riktig faktoranalys** — att leta några få *dolda dimensioner* bakom många
+korrelerade mått (t.ex. att HRV, vilopuls och sömn kan mäta samma "återhämtning")
+— är något annat än regressionen ovan och byggs **senare, som eget steg**, när
+antalet dagar räcker. Inte nu.
 
 Fyra villkor när den används:
 

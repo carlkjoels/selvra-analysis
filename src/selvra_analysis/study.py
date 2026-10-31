@@ -318,8 +318,45 @@ def lock(study: Study, seed: int | None = None) -> dict:
                                  days=days)
         record["schedule_sha256"] = n1.write_schedule(sched, study.schedule_path, seed)
         record["schedule_end"] = str(sched["date"].max())
+    _vagra_overlapp_med_samband(study, record)
     study.lock_path.write_text(json.dumps(record, indent=2) + "\n")
     return record
+
+
+def _data_window(study: Study, record: dict) -> tuple[str, str] | None:
+    """Datumfönstret studiens bekräftande analys använder: n1 = start→schemaslut
+    (framtid), observation = design.period [från, till]."""
+    d = study.design
+    if study.kind == "n1":
+        return str(d["start"]), str(record.get("schedule_end", d["start"]))
+    period = d.get("period")
+    return (str(period[0]), str(period[1])) if period else None
+
+
+def _vagra_overlapp_med_samband(study: Study, record: dict) -> None:
+    """En fråga ur utforskande_samband får bara prövas på data insamlad EFTER
+    låsning. Vägra om studiens datafönster överlappar ett analyserat samband-
+    fönster — annars prövar studien det skannern redan tittat på, och
+    domstolsprincipen faller."""
+    from selvra_analysis import utforskande_samband as us  # noqa: PLC0415 — lat: håller study import-lätt + undviker cykel
+    # Fail-closed: finns en samband-rapport men loggen saknas kan vi inte veta om
+    # studien prövar peekad data — vägra hellre än att tolka saknad logg som "inget".
+    if us.RAPPORT.exists() and not us.FONSTER.exists():
+        raise StudyError(
+            "en utforskande samband-rapport finns men fönsterloggen "
+            f"({us.FONSTER}) saknas — kan inte garantera att studien inte prövar "
+            "data skannern redan tittat på; återställ loggen innan låsning")
+    fonster = _data_window(study, record)
+    if fonster is None:
+        return
+    krock = us.overlappande_fonster(*fonster)
+    if krock:
+        w = krock[0]
+        raise StudyError(
+            f"studiens datafönster {fonster[0]}–{fonster[1]} överlappar ett "
+            f"utforskande samband-fönster ({w['fran']}–{w['till']}); en fråga "
+            "därifrån får bara prövas på data insamlad efter låsning — "
+            "välj ett senare fönster eller en ny studie på färsk data")
 
 
 def check_lock(study: Study) -> dict:

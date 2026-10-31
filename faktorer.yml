@@ -1,0 +1,51 @@
+# Utforskande samband (regression), INTE faktoranalys.
+#
+# Förvalda faktorer från dag t mot ett utfall natten t→t+1. Rangordnar
+# associationer med intervall — utforskande, märkt observerat (GRADE: låg),
+# aldrig i domen (METODPLAN: regression bara i skannern och det utforskande
+# sambandet). Riktig faktoranalys (dolda dimensioner bland korrelerade mått)
+# byggs senare, som eget steg, när antalet dagar räcker.
+#
+# Kolumnnamnen nedan är den FÖRSTA uppsättningen; mappningen mot marts justeras
+# vid första körningen på riktig data (utforskande_samband varnar för kolumner
+# som saknas i stället för att krascha).
+
+min_dagar: 60        # under tröskeln: rapporten säger "inget underlag", rangordnar inget
+blocklangd: 7        # dagar, cirkulär block-bootstrap (samma som motorn)
+n_boot: 2000
+
+# Faktorer från dag t. Utfallet tas natten t→t+1 — aldrig samma dygn åt båda håll.
+faktorer:
+  - traningsminuter          # kontinuerlig
+  - traning_efter_18         # binär (ja/nej)
+  - steg                     # kontinuerlig
+  - stress                   # Garmins UPPSKATTNING (märks som uppskattning i rapporten)
+  - somnlangd_natten_innan   # kontinuerlig (laggad, inte del av utfallet)
+  - dagstyp                  # binär (vardag=0, helg=1)
+
+# Alltid med. Firmwarebyte redovisas före/efter separat, inte bara som kovariat.
+kovariater:
+  - apparat
+  - firmware
+
+# Utfall, ett i taget, valt i förväg.
+utfall:
+  - nattglukos
+  - somnlangd
+
+# Komponenter som är DEL AV ett utfall — får aldrig vara faktor för det utfallet.
+del_av:
+  somnlangd: [djupsomn_min, remsomn_min, lattsomn_min]
+  nattglukos: []
+
+# Koden VÄGRAR om någon av dessa dyker upp som faktor eller utfall.
+forbjudet:
+  - insulin
+  - kolhydratkvot
+  - hypobehandling
+  - fasta_med_insulin
+  - alkoholdosering
+
+# Uppskattade (ej mätta) faktorer — märks som uppskattning i rapporten.
+uppskattning:
+  - stress
