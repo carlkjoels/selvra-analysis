@@ -234,6 +234,31 @@ klassificering): den behandlas som ett rör. Versionsloggas i rörloggen som en
 firmware, byts aldrig tyst, får fruset facit före driftsättning enligt
 PROTOKOLL, och ett modellbyte markerar seriebrott i serierna den rört.
 
+## Regression — bara i skannern och faktoranalysen, aldrig i domen
+
+Regression är ett generator- och utforskningsverktyg, inte en domare. Den får
+bo på exakt två ställen — **skannern** (för att föreslå frågor) och
+**faktoranalysen** (det utforskande faktorurvalet) — och aldrig i den
+konfirmerande körningen eller i håller/motbevisad/obestämd. Samma gräns som
+ML-reglerna, av samma skäl: det som föreslår får vara rikt, det som dömer måste
+vara förregistrerat och citerbart.
+
+Fyra villkor när den används:
+
+1. **Alltid märkt observerat.** En regressionskoefficient är en association i
+   historisk data, aldrig en effekt. Den ärver observationens startbetyg
+   (GRADE: låg) och presenteras aldrig som en dom.
+2. **Faktorer valda i förväg.** Vilka prediktorer som ingår bestäms innan
+   modellen körs — ingen stegvis sökning, ingen jakt på det som råkar bli
+   signifikant. Fiske är fiske även utan ett p-värde i domsvägen.
+3. **Hänsyn till beroende mellan dagar.** Dagar ur ett liv är inte oberoende
+   (samma autokorrelation som block-bootstrapen hanterar i domen). Standardfel
+   och intervall tar hänsyn till det, annars blir precisionen falsk.
+4. **Apparat och firmware alltid med som faktorer.** Mjukvaruuppdateringar
+   flyttar mått 3–13 % inom samma person (§6); en regression som utelämnar
+   apparat och firmware tillskriver den förskjutningen fel orsak. De är
+   obligatoriska kovariater, inte valfria.
+
 ## Byggs inte, med skäl
 
 - **Bandit-allokering för behandlingsval** (adaptiv randomisering mot "bästa
